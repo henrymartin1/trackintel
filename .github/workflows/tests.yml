@@ -27,33 +27,33 @@ jobs:
         postgis: [false]
         dev: [false]
         env:
-          - ci/envs/36-minimal.yaml
-          - ci/envs/38-no-optional-deps.yaml
-          - ci/envs/36-pd025.yaml
-          - ci/envs/37-latest-defaults.yaml
-          - ci/envs/37-latest-conda-forge.yaml
+          #- ci/envs/36-minimal.yaml
+          #- ci/envs/38-no-optional-deps.yaml
+          #- ci/envs/36-pd025.yaml
+          #- ci/envs/37-latest-defaults.yaml
+          #- ci/envs/37-latest-conda-forge.yaml
           - ci/envs/38-latest-conda-forge.yaml
-          - ci/envs/39-latest-conda-forge.yaml
+          #- ci/envs/39-latest-conda-forge.yaml
         include:
-          - env: ci/envs/37-latest-conda-forge.yaml
-            os: macos-latest
-            postgis: false
-            dev: false
+         # - env: ci/envs/37-latest-conda-forge.yaml
+          #  os: macos-latest
+          #  postgis: false
+          #  dev: false
           - env: ci/envs/38-latest-conda-forge.yaml
             os: macos-latest
             postgis: false
             dev: false
-          - env: ci/envs/37-latest-conda-forge.yaml
-            os: windows-latest
-            postgis: false
-            dev: false
+         # - env: ci/envs/37-latest-conda-forge.yaml
+         #   os: windows-latest
+         #   postgis: false
+         #   dev: false
           - env: ci/envs/38-latest-conda-forge.yaml
             os: windows-latest
             postgis: false
             dev: false
-          - env: ci/envs/37-dev.yaml
-            os: ubuntu-latest
-            dev: true
+        #  - env: ci/envs/37-dev.yaml
+        #    os: ubuntu-latest
+        #    dev: true
 
     steps:
       - uses: actions/checkout@v2
@@ -91,7 +91,7 @@ jobs:
           USE_PYGEOS: 0
         run: |
           source activate test
-          pytest -v -r s -n auto --color=yes --cov=geopandas --cov-append --cov-report term-missing --cov-report xml geopandas/
+          pytest -v -r s -n auto --color=yes --cov=trackintel --cov-append --cov-report term-missing --cov-report xml trackintel/
       - name: Test with PyGEOS
         shell: bash
         if: env.HAS_PYGEOS == 1
@@ -99,7 +99,7 @@ jobs:
           USE_PYGEOS: 1
         run: |
           source activate test
-          pytest -v -r s -n auto --color=yes --cov=geopandas --cov-append --cov-report term-missing --cov-report xml geopandas/
+          pytest -v -r s -n auto --color=yes --cov=trackintel --cov-append --cov-report term-missing --cov-report xml trackintel/
       - name: Test with PostGIS
         shell: bash
         if: contains(matrix.env, '38-latest-conda-forge.yaml') && contains(matrix.os, 'ubuntu')
