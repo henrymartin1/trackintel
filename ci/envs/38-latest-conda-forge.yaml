@@ -1,31 +1,18 @@
 name: test
 channels:
   - conda-forge
+  - defaults
 dependencies:
-  - python=3.8
-  # required
-  - pandas
-  - shapely
-  - fiona
-  - pyproj
-  - pygeos
-  # testing
-  - pytest
-  - pytest-cov
-  - pytest-xdist
-  - fsspec
-  # optional
-  - rtree
-  - matplotlib
-  - descartes
-  - mapclassify
-  - geopy
-  # installed in tests.yaml, because not available on windows
-  # - postgis
-  - SQLalchemy
-  - psycopg2
-  - libspatialite
-  - geoalchemy2
-  - pyarrow
-  # doctest testing
-  - pytest-doctestplus
+- python=3.8
+- numpy
+- matplotlib
+- pandas
+- geopandas
+- scikit-learn
+- networkx 
+- pint
+- pip 
+- geoalchemy2 
+- osmnx 
+- psycopg2
+- imageio
