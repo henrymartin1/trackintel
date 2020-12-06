@@ -37,7 +37,6 @@ jobs:
             postgis: false
             dev: false
       
-
     steps:
     - uses: actions/checkout@v2
     - name: Setup Conda
@@ -45,9 +44,9 @@ jobs:
       with:
         activate-conda: false
         
-     - name: Install Env
-        shell: bash
-        run: conda env create -f ${{ matrix.env }}
+    - name: Install Env
+      shell: bash
+      run: conda env create -f ${{ matrix.env }}
         
     - name: Test with pytest
       run: |
