@@ -46,6 +46,7 @@ jobs:
       run: conda env create -f ${{ matrix.env }}
         
     - name: Test with pytest
+      shell: bash
       run: |
         source activate test
         pytest --cov=./
