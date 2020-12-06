@@ -1,8 +1,9 @@
 import copy
 import datetime
 
+import numpy as np
 import pandas as pd
-
+from tqdm import tqdm
 
 def smoothen_triplegs(triplegs, method='douglas-peucker', tolerance=1.0):
     """reduces number of points while retaining structure of tripleg
@@ -46,7 +47,7 @@ def _temp_trip_stack_has_tripleg(temp_trip_stack):
     return has_tripleg
 
 
-def _create_trip_from_stack(temp_trip_stack, origin_activity, destination_activity, trip_id_counter):
+def _create_trip_from_stack(temp_trip_stack, origin_activity, destination_activity):
     """
     Aggregate information of trip elements in a structured dictionary
 
@@ -59,8 +60,6 @@ def _create_trip_from_stack(temp_trip_stack, origin_activity, destination_activi
                     Either dictionary or pandas series
     destination_activity : dictionary like
                     Either dictionary or pandas series
-    trip_id_counter : int
-            current trip id
 
     Returns
     -------
@@ -80,50 +79,15 @@ def _create_trip_from_stack(temp_trip_stack, origin_activity, destination_activi
     assert destination_activity['activity'] == True
     assert first_trip_element['activity'] == False
 
-    trip_dict_entry = {'id': trip_id_counter,
-                       'user_id': origin_activity['user_id'],
+    trip_dict_entry = {'user_id': origin_activity['user_id'],
                        'started_at': first_trip_element['started_at'],
                        'finished_at': last_trip_element['finished_at'],
                        'origin_staypoint_id': origin_activity['id'],
-                       'destination_staypoint_id': destination_activity['id']}
-
+                       'destination_staypoint_id': destination_activity['id'],
+                       'tpls': [tripleg['id'] for tripleg in temp_trip_stack if tripleg['type'] == 'tripleg'],
+                       'spts': [tripleg['id'] for tripleg in temp_trip_stack if tripleg['type'] == 'staypoint']}
+    
     return trip_dict_entry
-
-
-def _return_ids_to_df(temp_trip_stack, origin_activity, destination_activity, spts, tpls, trip_id_counter):
-    """
-    Write trip ids into the staypoint and tripleg GeoDataFrames.
-
-    Parameters
-    ----------
-    temp_trip_stack : list
-                    list of dictionary like elements (either pandas series or python dictionary). Contains all elements
-                    that will be aggregated into a trip
-    origin_activity : dictionary like
-                    Either dictionary or pandas series
-    destination_activity : dictionary like
-                    Either dictionary or pandas series
-    spts : GeoDataFrame
-            Staypoints
-    tpls :
-            Triplegs
-    trip_id_counter : int
-            current trip id
-
-    Returns
-    -------
-    None
-        Function alters the staypoint and tripleg GeoDataFrames inplace
-    """
-
-    spts.loc[spts.index == origin_activity['id'], ['next_trip_id']] = trip_id_counter
-    spts.loc[spts.index == destination_activity['id'], ['prev_trip_id']] = trip_id_counter
-
-    for row in temp_trip_stack:
-        if row['type'] == 'tripleg':
-            tpls.loc[tpls.index == row['id'], ['trip_id']] = trip_id_counter
-        elif row['type'] == 'staypoint':
-            spts.loc[spts.index == row['id'], ['trip_id']] = trip_id_counter
 
 
 def generate_trips(stps_input, tpls_input, gap_threshold=15, id_offset=0, print_progress=False):
@@ -175,15 +139,8 @@ def generate_trips(stps_input, tpls_input, gap_threshold=15, id_offset=0, print_
     tpls = tpls_input.copy()
     spts = stps_input.copy()
 
-    trip_id_counter = id_offset
     tpls['type'] = 'tripleg'
     spts['type'] = 'staypoint'
-    tpls['prev_trip_id'] = None
-    spts['next_trip_id'] = None
-    spts['trip_id'] = None
-
-    trips_of_user_list = []
-    dont_print_list = []
 
     # create table with relevant information from triplegs and staypoints.
     spts_tpls = spts[['started_at', 'finished_at', 'user_id', 'type', 'activity']].append(
@@ -198,118 +155,153 @@ def generate_trips(stps_input, tpls_input, gap_threshold=15, id_offset=0, print_
     spts_tpls.sort_values(by=['user_id', 'started_at'], inplace=True)
     spts_tpls['started_at_next'] = spts_tpls['started_at'].shift(-1)
     spts_tpls['activity_next'] = spts_tpls['activity'].shift(-1)
-
-    for user_id_this in spts_tpls['user_id'].unique():
-
-        spts_tpls_this = spts_tpls[spts_tpls['user_id'] == user_id_this]
-        # assert (spts_tpls_this['started_at'].is_monotonic)  # this is expensive and should be replaced
-
-        origin_activity = None
-        temp_trip_stack = []
-        before_first_trip = True
-        in_tripleg = False
-
-        for _, row in spts_tpls_this.iterrows():
-            if print_progress:
-                if trip_id_counter % 100 == 0:
-                    if not trip_id_counter in dont_print_list:
-                        print("trip number: {}".format(trip_id_counter))
-                        dont_print_list.append(trip_id_counter)
-
-            # skip all non-activities before the first trip
-            if before_first_trip:
-                if row['activity'] == False:
-                    continue
-                else:
-                    before_first_trip = False
-
-            # check if we can start a new trip
-            if in_tripleg is False:
-                # If there are several activities in a row, we skip until the last one
-                if row['activity'] is True and row['activity_next'] is True:
-                    continue
-
-                # if we did not start a tripleg yet and the origin is set
-                # encountering another activity means that we have to defer the
-                # start of the trip by 1
-                elif row['activity'] is True and origin_activity is not None:
-                    origin_activity = row
-                    continue
-
-                # If the current row is an activity and `origin_activity` is not set
-                # then we start a new trip. This is for example the case for the first trip
-                elif row['activity'] is True and origin_activity is None:
-                    origin_activity = row
-                    in_tripleg = True
-                    continue
-
-                # this is the standard case after we regularly finished a tripleg
-                elif row['activity'] is False and origin_activity is not None:
-                    in_tripleg = True
-
-            if in_tripleg is True:
-                # during trip generation/recording
-
-                # check if gap
-                if row['started_at_next'] - row['finished_at'] > datetime.timedelta(minutes=gap_threshold):
-                    # in case of a (temporal) gap we split the trip. This means we save the current trip and start
-                    # in case of a gap, the destination of the current trip and the origin of the next trip
-                    # are unknown. For the next trip, we set the `in_tripleg` flag to true to add everything after
-                    # the gap to the new trip (e.g., we don't skip until the next activity).
-
-                    # if the trip stack is empty, we do not generate the current trip.
-                    if len(temp_trip_stack) == 0:
-                        origin_activity = {'user_id': row['user_id'], 'activity': True, 'id': None}
-                        in_tripleg = True
-                        temp_trip_stack = list()
-
-                    # if the trip has no recored tripleg, we do not generate the current trip.
-                    elif (not _temp_trip_stack_has_tripleg(temp_trip_stack)):
-                        origin_activity = {'user_id': row['user_id'], 'activity': True, 'id': None}
-                        in_tripleg = True
-                        temp_trip_stack = list()
-
-                    else:
-                        # generate trip, start new trip
-                        destination_activity = {'user_id': row['user_id'], 'activity': True, 'id': None}
-
-                        trips_of_user_list.append(_create_trip_from_stack(temp_trip_stack, origin_activity,
-                                                                          destination_activity, trip_id_counter))
-                        _return_ids_to_df(temp_trip_stack, origin_activity, destination_activity,
-                                          spts, tpls, trip_id_counter)
-
-                        trip_id_counter += 1
-                        origin_activity = destination_activity
-                        destination_activity = None
-                        temp_trip_stack = list()
-                        in_tripleg = True
-
-                # check if trip ends regularly
-                elif row['activity'] is True:
-                    # if there are no triplegs in the trip, set the current activity as origin and start over
-                    if not _temp_trip_stack_has_tripleg(temp_trip_stack):
-                        origin_activity = row
-                        temp_trip_stack = list()
-                        in_tripleg = True
-
-                    # record trip and reset flags
-                    else:
-                        destination_activity = row
-                        trips_of_user_list.append(_create_trip_from_stack(temp_trip_stack, origin_activity,
-                                                                          destination_activity, trip_id_counter))
-                        _return_ids_to_df(temp_trip_stack, origin_activity, destination_activity,
-                                          spts, tpls, trip_id_counter)
-                        trip_id_counter += 1
-                        origin_activity = destination_activity
-                        destination_activity = None
-                        temp_trip_stack = list()
-                        in_tripleg = False
-
-                else:
-                    temp_trip_stack.append(row)
-
-    trips = pd.DataFrame(trips_of_user_list)
-    tpls.drop(['type'], axis=1, inplace=True)
-    spts.drop(['type'], axis=1, inplace=True)
-
+    
+    if print_progress:
+        tqdm.pandas(desc='User trip generation')
+        trips = spts_tpls.groupby(['user_id'], 
+                                  group_keys=False, 
+                                  as_index=False).progress_apply(_generate_trips_user, gap_threshold=gap_threshold).reset_index(drop=True)
+    else:
+        trips = spts_tpls.groupby(['user_id'], 
+                                  group_keys=False, 
+                                  as_index=False).apply(_generate_trips_user, gap_threshold=gap_threshold).reset_index(drop=True)
+    trips['id'] = trips.index + id_offset
+    
+    # assign trip_id to tpls
+    trip2tpl_map = trips[['id', 'tpls']].set_index('id').to_dict()['tpls']
+    ls = []
+    for key, values in trip2tpl_map.items():
+        for value in values:
+            ls.append([value, key])
+    temp = pd.DataFrame(ls, columns=[tpls.index.name, 'trip_id']).set_index(tpls.index.name)
+    tpls = tpls.join(temp, how='left')
+    
+    # assign trip_id to spts, for non-activity spts
+    trip2spt_map = trips[['id', 'spts']].set_index('id').to_dict()['spts']
+    ls = []
+    for key, values in trip2spt_map.items():
+        for value in values:
+            ls.append([value, key])
+    temp = pd.DataFrame(ls, columns=[spts.index.name, 'trip_id']).set_index(spts.index.name)
+    spts = spts.join(temp, how='left')
+    
+    # assign prev_trip_id to spts
+    temp = trips[['id', 'destination_staypoint_id']].copy()
+    temp.rename(columns={"id":"prev_trip_id", "destination_staypoint_id":spts.index.name}, inplace=True)
+    temp.set_index(spts.index.name, inplace=True)
+    spts = spts.join(temp, how ='left')
+    
+    # assign next_trip_id to spts
+    temp = trips[['id', 'origin_staypoint_id']].copy()
+    temp.rename(columns={"id":"next_trip_id", "origin_staypoint_id":spts.index.name}, inplace=True)
+    temp.set_index(spts.index.name, inplace=True)
+    spts = spts.join(temp, how ='left')
+    
+    # final cleaning
+    tpls.drop(columns=['type'], inplace=True)
+    spts.drop(columns=['type'], inplace=True)
+    trips.drop(columns = ['tpls', 'spts'], inplace=True)
+    trips.set_index('id', inplace=True)
+    
     return spts, tpls, trips
+
+def _generate_trips_user(df, gap_threshold):
+    # function called after groupby: should only contain records of one user
+    user_id = df['user_id'].unique()
+    assert len(user_id) == 1
+    user_id = user_id[0]
+
+    unknown_activity = {'user_id': user_id, 'activity': True, 'id': np.nan}
+    origin_activity = unknown_activity
+    temp_trip_stack = []
+    in_trip = False
+    trip_ls = []
+
+    for _, row in df.iterrows():
+        
+        
+        # check if we can start a new trip
+        # (we make sure that we start the trip with the most recent activity)
+        if in_trip is False:
+            # If there are several activities in a row, we skip until the last one
+            if row['activity'] and row['activity_next']:
+                continue
+
+            # if this is the last activity before the trip starts, reset the origin
+            elif row['activity']:
+                origin_activity = row
+                in_trip = True
+                continue
+
+            # if for non-activities we simply start the trip
+            else:
+                in_trip = True
+                
+        if in_trip is True:
+            # during trip generation/recording
+
+            # check if trip ends regularly
+            if row['activity'] is True:
+
+                # if there are no triplegs in the trip, set the current activity as origin and start over
+                if not _temp_trip_stack_has_tripleg(temp_trip_stack):
+                    origin_activity = row
+                    temp_trip_stack = list()
+                    in_trip = True
+
+                else:
+                    # record trip
+                    destination_activity = row
+                    trip_ls.append(_create_trip_from_stack(temp_trip_stack, origin_activity,destination_activity))
+
+                    # set values for next trip
+                    if row['started_at_next'] - row['finished_at'] > datetime.timedelta(minutes=gap_threshold):
+                        # if there is a gap after this trip the origin of the next trip is unknown
+                        origin_activity = unknown_activity
+                        destination_activity = None
+                        temp_trip_stack = list()
+                        in_trip = False
+
+                    else:
+                        # if there is no gap after this trip the origin of the next trip is the destination of the
+                        # current trip
+                        origin_activity = destination_activity
+                        destination_activity = None
+                        temp_trip_stack = list()
+                        in_trip = False
+
+            # check if gap during the trip
+            elif row['started_at_next'] - row['finished_at'] > datetime.timedelta(minutes=gap_threshold):
+                # in case of a gap, the destination of the current trip and the origin of the next trip
+                # are unknown.
+
+                # add current item to trip
+                temp_trip_stack.append(row)
+
+                # if the trip has no recored triplegs, we do not generate the current trip.
+                if not _temp_trip_stack_has_tripleg(temp_trip_stack):
+                    origin_activity = unknown_activity
+                    in_trip = True
+                    temp_trip_stack = list()
+
+                else:
+                    # add tripleg to trip, generate trip, start new trip with unknown origin
+                    destination_activity = unknown_activity
+
+                    trip_ls.append(_create_trip_from_stack(temp_trip_stack, origin_activity,destination_activity))
+                    origin_activity = unknown_activity
+                    destination_activity = None
+                    temp_trip_stack = list()
+                    in_trip = True
+
+            else:
+                temp_trip_stack.append(row)
+    
+    # if user ends generate last trip with unknown destination
+    if (len(temp_trip_stack) > 0) and (_temp_trip_stack_has_tripleg(temp_trip_stack)):
+        destination_activity = unknown_activity
+        trip_ls.append(_create_trip_from_stack(temp_trip_stack, origin_activity,destination_activity,))
+    
+    # print(trip_ls)
+    trips = pd.DataFrame(trip_ls)
+    return trips
